@@ -3,7 +3,7 @@
 ## Project Overview
 This repository contains my **CS601C Computational Statistics Midterm Project** at **Pace University**. The project focuses on analyzing three datasets: **College, Auto, and Boston Housing** using **R and RMarkdown**. It involves **data cleaning, exploratory data analysis (EDA), correlation analysis, regression modeling, and statistical interpretation** to extract meaningful insights.
 
-Repository Link: [GitHub - CS601C Computational Statistics Midterm Project](https://github.com/vijaysingh002/CS601C-Computational-Statistics-Midterm-Project)
+Repository Link: [GitHub - CS601C Computational Statistics Midterm Project](https://github.com/vijaysingh002/CS601C-Computational-Statistics-Project)
 
 ## Repository Contents
 
