@@ -61,7 +61,7 @@ Repository Link: [GitHub - CS601C Computational Statistics Midterm Project](http
 ## Connect
 For suggestions, questions, or collaboration, feel free to reach out:
 - GitHub: [vijaysingh002](https://github.com/vijaysingh002)
-- LinkedIn: [Your LinkedIn Profile](https://www.linkedin.com/in/your-profile)
+- LinkedIn: [Vijaysingh Puwar]([https://www.linkedin.com/in/vijaysinghpuwar/])
 
 If you find this project useful, consider starring the repository.
 
