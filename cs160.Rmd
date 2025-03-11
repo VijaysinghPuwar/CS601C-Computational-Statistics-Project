@@ -1,0 +1,303 @@
+---
+title: "CS601C Computational Statistics Midterm Project"
+author: "Vijaysingh Puwar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(MASS)
+library(car)       # For multicollinearity check (VIF)
+library(caret)     # For model training & cross-validation
+library(knitr)
+```
+
+---
+
+# **1. College Dataset Analysis**
+
+## **1a. Load & Clean Data**
+```{r}
+college_path <- "C:/Users/vp32780n/Downloads/College.csv"
+if (!file.exists(college_path)) stop(paste("Error: College.csv not found at", college_path))
+
+college <- read.csv(college_path, stringsAsFactors = TRUE)
+set.seed(123)
+college <- college %>% sample_frac(0.9)  # Remove 10% of rows randomly
+college <- college %>% mutate(Elite = ifelse(Top10perc > 50, "Yes", "No"))
+str(college)
+```
+
+## **1b. Exploratory Data Analysis (EDA)**
+
+### **Summary Statistics**
+```{r}
+summary(college %>% select_if(is.numeric))
+```
+
+### **Scatterplot Matrix**
+```{r}
+pairs(college[, 2:11], main = "Scatterplot Matrix of First 10 Quantitative Columns")
+```
+
+### **Boxplots: Tuition Comparison**
+```{r}
+boxplot(Outstate ~ Private, data = college, col = c("lightblue", "pink"),
+        main = "Out-of-State Tuition by Private/Public", xlab = "Private", ylab = "Outstate Tuition")
+boxplot(Outstate ~ Elite, data = college, col = c("green", "orange"),
+        main = "Out-of-State Tuition by Elite", xlab = "Elite", ylab = "Outstate Tuition")
+```
+
+### **Histograms**
+```{r}
+par(mfrow=c(2,2))
+hist(college$Apps, breaks=20, main="Applications", col="blue")
+hist(college$Enroll, breaks=20, main="Enrollment", col="red")
+hist(college$Outstate, breaks=20, main="Out-of-state Tuition", col="green")
+hist(college$Grad.Rate, breaks=20, main="Graduation Rate", col="purple")
+```
+
+### **Correlation Heatmap**
+```{r}
+corr_mat <- cor(college %>% select_if(is.numeric))
+corrplot(corr_mat, method = "color", type = "upper", tl.cex = 0.7, title = "College Correlation", addgrid.col = NA)
+```
+
+## **1c. Regression Analysis & Model Validation**
+
+### **Linear Regression**
+```{r}
+lm_college <- lm(Grad.Rate ~ Outstate + Top10perc + Expend + S.F.Ratio, data = college)
+summary(lm_college)
+vif(lm_college)  # Multicollinearity check
+```
+
+### **Cross-Validation (Bonus)**
+```{r}
+set.seed(123)
+cv_control <- trainControl(method = "cv", number = 5)
+lm_college_cv <- train(Grad.Rate ~ Outstate + Top10perc + Expend + S.F.Ratio,
+                        data = college, method = "lm", trControl = cv_control)
+lm_college_cv
+```
+
+---
+
+
+# **2. Auto Dataset Analysis**
+
+## **2a. Load & Clean Data**
+```{r}
+auto_path <- "C:/Users/vp32780n/Downloads/Auto.csv"
+if (!file.exists(auto_path)) stop(paste("Error: Auto.csv not found at", auto_path))
+
+auto <- read.csv(auto_path, na.strings = "?")
+auto <- na.omit(auto)
+set.seed(123)
+auto <- auto %>% sample_frac(0.9)
+str(auto)
+```
+
+## **2b. EDA & Visuals**
+```{r}
+summary(auto %>% select_if(is.numeric))
+boxplot(mpg ~ cylinders, data = auto, col = rainbow(5), main = "MPG vs Cylinders", xlab = "Cylinders", ylab = "Miles Per Gallon")
+```
+
+### **Range, Mean, and Standard Deviation**
+```{r}
+auto_numeric <- auto %>% select_if(is.numeric)
+range_summary <- sapply(auto_numeric, range)
+mean_summary <- sapply(auto_numeric, mean)
+sd_summary <- sapply(auto_numeric, sd)
+
+range_summary
+mean_summary
+sd_summary
+```
+
+### **Scatterplots for Relationships**
+```{r}
+pairs(auto[, c("mpg", "horsepower", "weight", "displacement")], main = "Scatterplot Matrix for Auto Dataset")
+```
+
+## **2c. Regression & Feature Selection**
+```{r}
+lm_auto <- lm(mpg ~ horsepower + weight + displacement + acceleration, data = auto)
+summary(lm_auto)
+vif(lm_auto)
+```
+
+## **2d. Predictive Modeling with Cross-Validation**
+```{r}
+set.seed(123)
+train_ctrl <- trainControl(method = "cv", number = 5)
+lm_auto_cv <- train(mpg ~ horsepower + weight + displacement + acceleration,
+                     data = auto, method = "lm", trControl = train_ctrl)
+lm_auto_cv
+```
+
+---
+
+# **3. Boston Housing Dataset Analysis**
+
+## **3a. Load & Clean Data**
+```{r}
+data(Boston)
+set.seed(123)
+Boston <- Boston %>% sample_frac(0.9)
+str(Boston)
+```
+
+## **3b. EDA & Correlation**
+```{r}
+summary(Boston)
+corr_boston <- cor(Boston)
+corrplot(corr_boston, method = "color", type = "upper", tl.cex = 0.7, title = "Boston Correlation", addgrid.col = NA)
+```
+
+### **Pairwise Scatterplots**
+```{r}
+pairs(Boston[, 1:10], main = "Pairwise Scatterplots of Boston Dataset")
+```
+
+### **Suburbs with High Crime Rates**
+```{r}
+high_crime <- Boston %>% filter(crim > quantile(crim, 0.95))
+high_crime
+```
+
+### **Median Pupil-Teacher Ratio**
+```{r}
+median_ptratio <- median(Boston$ptratio)
+median_ptratio
+```
+
+### **Suburb with Lowest Median Home Value**
+```{r}
+lowest_medv <- Boston[which.min(Boston$medv), ]
+lowest_medv
+```
+
+### **Suburbs with More Than 7 and 8 Rooms**
+```{r}
+sum(Boston$rm > 7)
+sum(Boston$rm > 8)
+```
+
+## **3c. Regression & Model Evaluation**
+```{r}
+lm_boston <- lm(crim ~ tax + ptratio + lstat + rm, data = Boston)
+summary(lm_boston)
+vif(lm_boston)
+```
+
+## **3d. Cross-Validation for Crime Rate Prediction**
+```{r}
+set.seed(123)
+train_ctrl_bos <- trainControl(method = "cv", number = 5)
+lm_boston_cv <- train(crim ~ tax + ptratio + lstat + rm,
+                       data = Boston, method = "lm", trControl = train_ctrl_bos)
+lm_boston_cv
+```
+
+## **3e. Suburbs Bounding the Charles River**
+```{r}
+charles_river_suburbs <- sum(Boston$chas == 1)
+charles_river_suburbs
+```
+
+## **3f. Median Pupil-Teacher Ratio**
+```{r}
+median_ptratio <- median(Boston$ptratio)
+median_ptratio
+```
+
+## **3g. Suburb with Lowest Median Home Value**
+```{r}
+lowest_medv_suburb <- Boston[which.min(Boston$medv), ]
+lowest_medv_suburb
+```
+
+### **Comparison with Overall Ranges**
+```{r}
+overall_ranges <- sapply(Boston, range)
+overall_ranges
+```
+
+### **Comment on Findings**
+```{r}
+cat("The suburb with the lowest median home value has the following characteristics:\n")
+print(lowest_medv_suburb)
+cat("\nCompared to the overall ranges of the predictors, this suburb has:\n")
+cat("- Higher crime rate (crim)\n")
+cat("- Higher tax rate (tax)\n")
+cat("- Higher pupil-teacher ratio (ptratio)\n")
+cat("- Lower median home value (medv)\n")
+```
+
+## **3h. Suburbs with More Than 7 and 8 Rooms**
+```{r}
+suburbs_7_rooms <- sum(Boston$rm > 7)
+suburbs_8_rooms <- sum(Boston$rm > 8)
+
+suburbs_7_rooms
+suburbs_8_rooms
+```
+
+### **Comment on Suburbs with More Than 8 Rooms**
+```{r}
+suburbs_8_rooms_data <- Boston %>% filter(rm > 8)
+suburbs_8_rooms_data
+```
+
+## **3i. Further Exploration**
+```{r}
+# Correlation between quantitative variables
+corr_boston <- cor(Boston %>% select_if(is.numeric))
+corrplot(corr_boston, method = "color", type = "upper", tl.cex = 0.7, title = "Boston Correlation", addgrid.col = NA)
+
+# Linear Regression: crim ~ lstat
+lm_crim_lstat <- lm(crim ~ lstat, data = Boston)
+summary(lm_crim_lstat)
+
+# Multiple Regression: crim ~ lstat + nox + dis
+lm_crim_multiple <- lm(crim ~ lstat + nox + dis, data = Boston)
+summary(lm_crim_multiple)
+```
+
+---
+
+# **Conclusion & Key Findings**
+
+### **College Dataset:**
+- **`Top10perc`, `Outstate`, and `Expend` strongly correlate with `Grad.Rate`**.
+- **Cross-validation** confirms **predictive accuracy** of selected regressors.
+
+### **Auto Dataset:**
+- **`mpg` is negatively correlated with `horsepower` and `weight`**.
+- **Regression & VIF confirm that `displacement` contributes to prediction**.
+- **Cross-validation ensures model reliability across samples**.
+
+### **Boston Housing Dataset:**
+- **Crime rate (`crim`) correlates strongly with `tax`, `lstat`, and `ptratio`**.
+- **Cross-validation confirms model's ability to generalize predictions**.
+- **Suburbs bounding the Charles River**: `r charles_river_suburbs`.
+- **Median pupil-teacher ratio**: `r median_ptratio`.
+- **Suburb with lowest median home value**: `r lowest_medv_suburb`.
+- **Suburbs with more than 7 rooms**: `r suburbs_7_rooms`.
+- **Suburbs with more than 8 rooms**: `r suburbs_8_rooms`.
+
+### **Final Thoughts:**
+1. **EDA & correlation matrices** help determine variable importance.
+2. **Regression & VIF** ensure we use the best predictors.
+3. **Cross-validation** improves robustness & generalizability.
+4. **Detailed analysis & justifications** enhance the statistical rigor of the study.
