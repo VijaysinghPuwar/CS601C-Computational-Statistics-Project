@@ -1,0 +1,738 @@
+---
+title: "Regression Analysis of the College, Auto and Boston Datasets"
+subtitle: "Statistical modeling and model evaluation in R"
+author: "Vijaysingh Puwar"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+    theme: flatly
+    df_print: kable
+    mathjax: null
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = TRUE,
+  fig.width = 9,
+  fig.height = 4.5,
+  fig.align = "center",
+  dpi = 96
+)
+
+# Locate the project root (the folder that holds R/helpers.R) so the report
+# renders the same way from RStudio, from render.R or from any working
+# directory.
+find_project_root <- function(path = getwd()) {
+  path <- normalizePath(path, mustWork = TRUE)
+  while (!file.exists(file.path(path, "R", "helpers.R"))) {
+    parent <- dirname(path)
+    if (parent == path) stop("Could not find the project root (R/helpers.R)")
+    path <- parent
+  }
+  path
+}
+root <- find_project_root()
+knitr::opts_knit$set(root.dir = root)
+```
+
+```{r load, include = FALSE}
+source(file.path(root, "R", "helpers.R"))
+source(file.path(root, "R", "analysis.R"))
+check_packages()
+library(ggplot2)
+
+res <- run_analysis(file.path(root, "data"))
+set <- res$settings
+
+fmt <- function(x, digits = 2) formatC(x, format = "f", digits = digits)
+pct <- function(x, digits = 0) paste0(fmt(100 * x, digits), "%")
+pval <- function(model, term) summary(model)$coefficients[term, "Pr(>|t|)"]
+fmt_p <- function(p) if (p < 0.001) "< 0.001" else fmt(p, 3)
+
+show_comparison <- function(comparison) {
+  knitr::kable(comparison, digits = 3, row.names = FALSE,
+               col.names = c("Model", "CV RMSE (train)", "Test RMSE",
+                             "Test MAE", "Test R squared"))
+}
+coef_table <- function(model, digits = 4) {
+  knitr::kable(summary(model)$coefficients, digits = digits)
+}
+by_model <- function(comparison, model) comparison[comparison$Model == model, ]
+best_model <- function(comparison) {
+  comparison[which.min(comparison$Test_RMSE), ]
+}
+gain_vs_baseline <- function(comparison, model) {
+  base <- by_model(comparison, "Mean baseline")$Test_RMSE
+  1 - by_model(comparison, model)$Test_RMSE / base
+}
+shapiro_w <- function(model) {
+  unname(stats::shapiro.test(rstandard(model))$statistic)
+}
+n_influential <- function(model) sum(cooks.distance(model) > 4 / nobs(model))
+
+asset_dir <- file.path(root, "assets")
+save_asset <- function(plot, name, width = 9, height = 4.5) {
+  ggsave(file.path(asset_dir, name), plot, width = width, height = height,
+         dpi = 150, bg = "white")
+}
+
+col_cmp <- res$college$eval$comparison
+auto_cmp <- res$auto$eval$comparison
+bos_cmp <- res$boston$eval$comparison
+
+auto_log_name <- "OLS, log(mpg) ~ weight + year + origin"
+auto_course_name <- "OLS, 4 coursework predictors"
+col_best <- best_model(col_cmp)
+auto_best <- best_model(auto_cmp)
+bos_best <- best_model(bos_cmp)
+bos_ols <- by_model(bos_cmp, "OLS, all 12 predictors")
+```
+
+```{r claims-check, include = FALSE}
+# Some sentences in this report describe results in words. These checks stop
+# the render if a future change to the data or models makes one of them false.
+claim <- function(ok, what) {
+  if (!isTRUE(ok)) stop("Report claim no longer holds: ", what)
+}
+p_of <- pval
+cd <- res$college$data
+claim(nrow(res$college$raw) == 777, "College has 777 rows")
+claim(nrow(res$auto$data) == 392, "Auto has 392 rows")
+claim(nrow(res$boston$data) == 506, "Boston has 506 rows")
+claim(all(tapply(cd$Outstate, cd$Private, median)[["Yes"]] >
+            tapply(cd$Outstate, cd$Private, median)[["No"]],
+          tapply(cd$Outstate, cd$Elite, median)[["Yes"]] >
+            tapply(cd$Outstate, cd$Elite, median)[["No"]]),
+      "private and elite colleges have higher median tuition")
+claim(coef(res$college$lm_course)[["Expend"]] < 0 &&
+        cor(cd$Expend, cd$Grad.Rate) > 0,
+      "Expend coefficient negative but simple correlation positive")
+claim(p_of(res$college$lm_course, "S.F.Ratio") > 0.05,
+      "S.F.Ratio not significant")
+claim(max(cooks.distance(res$college$lm_all)) < 0.5,
+      "no College observation dominates the fit")
+claim(p_of(res$auto$lm_course, "displacement") > 0.05 &&
+        p_of(res$auto$lm_course, "acceleration") > 0.05,
+      "displacement and acceleration add little to the coursework model")
+claim(auto_best$Model == auto_log_name &&
+        which.min(auto_cmp$CV_RMSE) == which(auto_cmp$Model == auto_log_name),
+      "log(mpg) model is best on both CV and test RMSE")
+claim(by_model(auto_cmp, "Lasso, all 7 predictors")$Test_RMSE >
+        by_model(auto_cmp, "OLS, weight + year + origin")$Test_RMSE,
+      "lasso does not beat the hand-specified models")
+claim(by_model(auto_cmp, "OLS, weight + year + origin")$Test_RMSE <
+        by_model(auto_cmp, auto_course_name)$Test_RMSE,
+      "reduced model improves on the coursework model")
+claim(shapiro_w(res$boston$crime_log) > shapiro_w(res$boston$crime_raw),
+      "log1p crime residuals closer to normal")
+claim(p_of(res$boston$crime_log, "tax") < 0.001 &&
+        p_of(res$boston$crime_log, "lstat") < 0.001,
+      "tax and lstat strongly associated with log crime")
+claim(p_of(res$boston$crime_log, "ptratio") > 0.05 &&
+        p_of(res$boston$crime_log, "chas") > 0.05,
+      "ptratio and chas not associated with log crime")
+hc <- res$boston$data[res$boston$data$crim >
+                        quantile(res$boston$data$crim, 0.95), ]
+claim(length(unique(hc$tax)) == 1 && length(unique(hc$ptratio)) == 1,
+      "high-crime suburbs share one tax rate and one pupil-teacher ratio")
+crime_hi <- fitted(res$boston$crime_log) > 1.5
+claim(mean(res$boston$data$tax[crime_hi] == 666) > 0.8,
+      "high fitted log crime values are mostly the tax = 666 suburbs")
+claim(grepl("^Regression tree", bos_best$Model),
+      "tree has the lowest Boston test RMSE")
+bos_t <- abs(summary(res$boston$lm_all)$coefficients[-1, "t value"])
+claim(setequal(names(sort(bos_t, decreasing = TRUE))[1:5],
+               c("lstat", "rm", "ptratio", "dis", "nox")),
+      "largest Boston OLS t values")
+claim(coef(res$boston$lm_all)[["lstat"]] < 0 &&
+        coef(res$boston$lm_all)[["ptratio"]] < 0 &&
+        coef(res$boston$lm_all)[["rm"]] > 0, "Boston OLS coefficient signs")
+```
+
+# Executive summary
+
+This report analyzes three public teaching datasets from *An Introduction to
+Statistical Learning* (ISLR) with linear regression, lasso regression and
+regression trees. Every model is fitted on an 80% training split, tuned and
+compared with 10-fold cross-validation on that split, and scored once on a
+held-out 20% test split against a mean-only baseline. All numbers below are
+computed when the report is rendered.
+
+- **Auto (fuel efficiency).** The best test RMSE came from
+  **`r auto_best$Model`**: `r fmt(auto_best$Test_RMSE)` mpg against
+  `r fmt(by_model(auto_cmp, "Mean baseline")$Test_RMSE)` mpg for the
+  baseline, a `r pct(gain_vs_baseline(auto_cmp, auto_best$Model))` reduction
+  (test R squared `r fmt(auto_best$Test_R2)`). The original four-predictor
+  coursework model reached `r fmt(by_model(auto_cmp, auto_course_name)$Test_RMSE)` mpg.
+  Displacement, horsepower, weight and cylinders are strongly collinear
+  (VIF up to `r fmt(max(res$auto$vif_size), 1)`).
+- **Boston (housing values).** The best test RMSE came from
+  **`r bos_best$Model`**: `r fmt(bos_best$Test_RMSE)` (in $1000s) against
+  `r fmt(by_model(bos_cmp, "Mean baseline")$Test_RMSE)` for the baseline and
+  `r fmt(bos_ols$Test_RMSE)` for ordinary least squares (test R squared
+  `r fmt(bos_best$Test_R2)`).
+- **Boston (crime).** Per capita crime is extremely right skewed. Modeling
+  `log1p(crim)` instead of `crim` made the residuals much closer to normal
+  (Shapiro-Wilk W `r fmt(shapiro_w(res$boston$crime_raw))` raw vs
+  `r fmt(shapiro_w(res$boston$crime_log))` transformed), and property tax rate
+  and lower-status population share remained strongly associated with crime.
+- **College (graduation rate).** The models explain a moderate share of the
+  variation. The best test R squared was `r fmt(col_best$Test_R2)`
+  (`r col_best$Model`, test RMSE `r fmt(col_best$Test_RMSE)` percentage
+  points against `r fmt(by_model(col_cmp, "Mean baseline")$Test_RMSE)` for the
+  baseline), so most variation in graduation rate is not captured by these
+  institutional variables.
+- **Data quality.** `r nrow(res$college$invalid)` College rows contain
+  percentages above 100 and are excluded from modeling, with the raw file left
+  unchanged.
+
+These are observational datasets, so every result describes association, not
+causation.
+
+# Objectives and questions
+
+| Dataset | Question | Response |
+|---|---|---|
+| College | Which institutional characteristics are associated with graduation rate, and how well do they predict it? | `Grad.Rate` |
+| Auto | Which vehicle characteristics are associated with fuel efficiency, and how does predictor collinearity affect the model? | `mpg` |
+| Boston | Which neighborhood characteristics are associated with (a) per capita crime and (b) median home value? | `crim`, `medv` |
+
+The report also keeps the descriptive questions from the original coursework
+(for example, how many suburbs bound the Charles River) and answers them once,
+with values generated from the data.
+
+# Data
+
+```{r data-summary}
+data.frame(
+  Dataset = c("College", "Auto", "Boston"),
+  File = c("data/College.csv", "data/Auto.csv", "data/Boston.csv"),
+  Rows = c(nrow(res$college$raw), nrow(res$auto$data), nrow(res$boston$data)),
+  `Rows modeled` = c(nrow(res$college$data), nrow(res$auto$data),
+                     nrow(res$boston$data)),
+  `Missing values` = c(sum(is.na(res$college$raw)), sum(is.na(res$auto$data)),
+                       sum(is.na(res$boston$data))),
+  check.names = FALSE
+)
+```
+
+- **College.** 777 U.S. colleges from the 1995 *US News and World Report*.
+  Columns `Top10perc`, `Top25perc`, `PhD`, `Terminal`, `perc.alumni` and
+  `Grad.Rate` are percentages and are checked against the range 0 to 100.
+- **Auto.** The ISLR `Auto` data. The original file marks five unknown
+  horsepower values as `?`; this copy already excludes those rows, and the
+  loader still treats `?` as missing so a different copy would fail validation
+  instead of being read silently. `origin` is converted from codes 1/2/3 to
+  American/European/Japanese.
+- **Boston.** The ISLR2 version of the Boston housing data. It is identical to
+  `MASS::Boston` except that it omits the `black` column, so the analysis reads
+  the shipped CSV and does not load `MASS`.
+
+All loaders stop with an explicit error if a required column is missing,
+non-numeric or contains missing values.
+
+# Methodology
+
+- **Split.** Each dataset is split once into 80% training and 20% test rows
+  with seed `r set$split_seed`. All models for a dataset use the same split.
+- **Cross-validation.** 10-fold cross-validation on the training rows only,
+  with one fold assignment (seed `r set$cv_seed`) shared by all models, so CV
+  RMSE values are directly comparable. The test rows are used once, for the
+  final scores.
+- **Models.**
+  - *Mean baseline*: predicts the training mean for every row. Any useful
+    model has to beat it.
+  - *Ordinary least squares (OLS)*: the interpretable reference model,
+    including the coursework specifications.
+  - *Lasso* (`glmnet`): shrinks coefficients and can set some to zero, which
+    helps when predictors are collinear. The penalty is chosen by an inner
+    10-fold CV using the one-standard-error rule.
+  - *Regression tree* (`rpart`): captures nonlinear relationships and
+    interactions without specifying them. It is pruned at the complexity
+    parameter with the lowest inner cross-validated error.
+- **Metrics.** RMSE and MAE are in the units of the response. Test R squared
+  is `1 - SSE/SST` on the test rows; it can be negative when a model is worse
+  than predicting the test mean, which is why the baseline scores close to 0.
+- **Diagnostics.** Residuals vs fitted values, a normal Q-Q plot and a
+  scale-location plot for the main linear models, plus a count of
+  observations with Cook's distance above 4/n.
+
+The original coursework randomly removed 10% of each dataset before analysis.
+That step is dropped here: evaluation now relies on a held-out test set, and
+discarding rows would only reduce the data available for fitting.
+
+# College: graduation rate
+
+## Data checks
+
+```{r college-invalid}
+res$college$invalid[, c("Name", college_percent_cols)]
+```
+
+These rows report a percentage above 100, which is impossible. They are
+excluded from the modeled data (`r nrow(res$college$data)` of
+`r nrow(res$college$raw)` rows remain). Because only
+`r nrow(res$college$invalid)` rows are affected, excluding them is simpler and
+more transparent than guessing a corrected value.
+
+## Exploration
+
+```{r college-eda, fig.height = 4.5}
+college_plot <- ggplot(res$college$data,
+                       aes(Outstate, Grad.Rate, colour = Private)) +
+  geom_point(alpha = 0.55, size = 1.5) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, linewidth = 1) +
+  scale_colour_manual(values = c(No = palette_main[["secondary"]],
+                                 Yes = palette_main[["primary"]]),
+                      labels = c(No = "Public", Yes = "Private"),
+                      name = NULL) +
+  scale_x_continuous(labels = scales::label_dollar()) +
+  labs(title = paste("Colleges with higher tuition tend to have higher",
+                     "graduation rates"),
+       x = "Out-of-state tuition (USD)", y = "Graduation rate (%)",
+       caption = "Each point is a college. Lines are least-squares fits.") +
+  theme_report()
+college_plot
+```
+
+```{r college-tuition}
+tuition_by_group <- function(group) {
+  stats <- tapply(res$college$data$Outstate, res$college$data[[group]],
+                  stats::median)
+  data.frame(Grouping = group, Level = names(stats),
+             `Median out-of-state tuition` = as.numeric(stats),
+             check.names = FALSE)
+}
+rbind(tuition_by_group("Private"), tuition_by_group("Elite"))
+```
+
+`Elite` marks colleges where more than 50% of new students came from the top
+10% of their high school class (`r sum(res$college$data$Elite == "Yes")`
+colleges). Private and elite colleges both have higher median out-of-state
+tuition.
+
+```{r college-cor}
+col_cor <- stats::cor(res$college$data[college_numeric_cols])[, "Grad.Rate"]
+col_cor <- sort(col_cor[names(col_cor) != "Grad.Rate"], decreasing = TRUE)
+top_bottom <- c(head(col_cor, 5), tail(col_cor, 5))
+knitr::kable(data.frame(Predictor = names(top_bottom),
+                        `Correlation with Grad.Rate` = top_bottom,
+                        check.names = FALSE),
+             digits = 2, row.names = FALSE)
+```
+
+The table shows the five strongest positive and five most negative
+correlations. On its own, instructional expenditure (`Expend`) is positively
+correlated with graduation rate (r = `r fmt(col_cor[["Expend"]])`).
+
+## Coursework model
+
+```{r college-course}
+coef_table(res$college$lm_course)
+```
+
+Holding the other three predictors fixed, the coefficient on `Expend` is
+negative (p = `r fmt_p(pval(res$college$lm_course, "Expend"))`), even though
+its simple correlation with graduation rate is positive. `Expend` is
+correlated with `Outstate` and `Top10perc`, so its coefficient describes what
+remains after those are accounted for, not its overall relationship.
+`S.F.Ratio` is not significant in this model
+(p = `r fmt_p(pval(res$college$lm_course, "S.F.Ratio"))`).
+
+## Model comparison
+
+```{r college-compare}
+show_comparison(col_cmp)
+```
+
+All models improve on the baseline, but the gains are modest: the best test R
+squared is `r fmt(col_best$Test_R2)`. The VIFs of the full OLS model show
+strong collinearity among the size variables (`Accept`
+`r fmt(res$college$vif[["Accept"]], 1)`, `Enroll`
+`r fmt(res$college$vif[["Enroll"]], 1)`, `F.Undergrad`
+`r fmt(res$college$vif[["F.Undergrad"]], 1)`, `Apps`
+`r fmt(res$college$vif[["Apps"]], 1)`), which makes their individual
+coefficients unstable even when predictions remain reasonable.
+
+## Diagnostics
+
+```{r college-diag}
+plot_diagnostics(res$college$lm_all,
+                 "Diagnostics: OLS, all 17 predictors (College training set)")
+```
+
+Residuals show no clear curvature and are close to normal apart from a few
+large positive residuals. Their spread narrows for colleges with high
+predicted graduation rates, which is expected for a percentage bounded at 100.
+`r n_influential(res$college$lm_all)` training rows have Cook's distance above
+4/n, but the largest is `r fmt(max(cooks.distance(res$college$lm_all)))`, so no
+single college dominates the fit.
+
+# Auto: fuel efficiency
+
+## Collinearity
+
+```{r auto-cor, fig.height = 5}
+plot_correlation(res$auto$data[c("mpg", "cylinders", "displacement",
+                                 "horsepower", "weight", "acceleration",
+                                 "year")],
+                 "Correlations among Auto variables")
+```
+
+```{r auto-vif}
+knitr::kable(data.frame(
+  Predictor = names(res$auto$vif_size),
+  `VIF (cylinders, displacement, horsepower, weight)` = res$auto$vif_size,
+  check.names = FALSE
+), digits = 1, row.names = FALSE)
+knitr::kable(data.frame(
+  Predictor = names(res$auto$vif_course),
+  `VIF (coursework predictors)` = res$auto$vif_course,
+  check.names = FALSE
+), digits = 1, row.names = FALSE)
+```
+
+A variance inflation factor (VIF) measures how much the variance of a
+coefficient estimate is inflated because that predictor can be predicted from
+the other predictors. It is a multicollinearity diagnostic, not a measure of
+importance. Values above roughly 5 to 10 indicate that individual coefficients
+are poorly determined. Here the engine-size variables carry largely the same
+information.
+
+## Coursework model
+
+```{r auto-course}
+coef_table(res$auto$lm_course)
+```
+
+With horsepower and weight in the model, displacement
+(p = `r fmt_p(pval(res$auto$lm_course, "displacement"))`) and acceleration
+(p = `r fmt_p(pval(res$auto$lm_course, "acceleration"))`) add little. That
+does not mean they are unrelated to mpg (their simple correlations are
+`r fmt(stats::cor(res$auto$data$mpg, res$auto$data$displacement))` and
+`r fmt(stats::cor(res$auto$data$mpg, res$auto$data$acceleration))`); it means
+their information overlaps with the other predictors.
+
+## A simpler specification
+
+```{r auto-weight, fig.height = 4.5}
+auto_plot <- ggplot(res$auto$data, aes(weight, mpg, colour = origin)) +
+  geom_point(alpha = 0.6, size = 1.6) +
+  geom_smooth(aes(group = 1), method = "loess", formula = y ~ x, se = FALSE,
+              colour = "grey25", linewidth = 0.9) +
+  scale_colour_manual(values = c(American = palette_main[["primary"]],
+                                 European = palette_main[["secondary"]],
+                                 Japanese = palette_main[["neutral"]]),
+                      name = NULL) +
+  scale_x_continuous(labels = scales::label_comma()) +
+  labs(title = "Fuel efficiency falls as weight rises, along a curve",
+       x = "Weight (lb)", y = "Miles per gallon",
+       caption = "Grey line: loess smooth over all cars.") +
+  theme_report()
+auto_plot
+```
+
+Because weight already captures most of the engine-size information, a model
+with `weight`, model `year` and `origin` is easier to interpret than one with
+several collinear size variables. The relationship between weight and mpg is
+curved, and the spread of mpg grows with its level, so the same model is also
+fitted to `log(mpg)` with predictions converted back to mpg.
+
+```{r auto-diag-reduced}
+plot_diagnostics(res$auto$lm_reduced,
+                 "Diagnostics: mpg ~ weight + year + origin")
+```
+
+```{r auto-diag-log}
+plot_diagnostics(res$auto$lm_log,
+                 "Diagnostics: log(mpg) ~ weight + year + origin")
+```
+
+On the original scale the residuals curve and fan out with the fitted values.
+On the log scale the curvature and the change in spread are both reduced.
+
+```{r auto-log-coef}
+coef_table(res$auto$lm_log, digits = 5)
+```
+
+On the log scale, each additional 1,000 lb is associated with roughly
+`r pct(1 - exp(1000 * coef(res$auto$lm_log)[["weight"]]))` lower mpg, and each
+later model year with roughly
+`r pct(exp(coef(res$auto$lm_log)[["year"]]) - 1, 1)` higher mpg, holding the
+other terms fixed.
+
+## Model comparison
+
+```{r auto-compare}
+show_comparison(auto_cmp)
+```
+
+Dropping redundant size variables and adding `year` and `origin` improves on
+the coursework model, and the log specification is the most accurate model on
+both CV and test RMSE. The lasso, given all seven predictors, does not beat
+the simpler hand-specified models. Removing a variable only because its VIF is
+high is not automatically correct; here it is supported by the comparison, but
+the reduced model also adds `year`, which accounts for much of the gain.
+
+# Boston: crime and housing values
+
+## Descriptive questions
+
+```{r boston-descriptive}
+bos <- res$boston$data
+q95 <- stats::quantile(bos$crim, 0.95)
+high_crime <- bos[bos$crim > q95, ]
+lowest <- bos[which.min(bos$medv), , drop = FALSE]
+lowest_pct <- vapply(names(bos), function(v) mean(bos[[v]] <= lowest[[v]]),
+                     numeric(1))
+over8 <- bos[bos$rm > 8, ]
+```
+
+- `r sum(bos$chas == 1)` of `r nrow(bos)` suburbs bound the Charles River.
+- The median pupil-teacher ratio is `r fmt(stats::median(bos$ptratio), 1)`.
+- `r nrow(high_crime)` suburbs are above the 95th percentile of per capita
+  crime (`r fmt(q95)`). All of them have a property tax rate of
+  `r paste(sort(unique(high_crime$tax)), collapse = ", ")` per $10,000 and a
+  pupil-teacher ratio of
+  `r paste(sort(unique(high_crime$ptratio)), collapse = ", ")`.
+- `r sum(bos$rm > 7)` suburbs average more than seven rooms per dwelling and
+  `r nrow(over8)` average more than eight. The more-than-eight group has a
+  median `medv` of `r fmt(stats::median(over8$medv), 1)` versus
+  `r fmt(stats::median(bos$medv), 1)` overall, and a median `lstat` of
+  `r fmt(stats::median(over8$lstat), 1)`% versus
+  `r fmt(stats::median(bos$lstat), 1)`%.
+
+The suburb with the lowest median home value (row `r rownames(lowest)`,
+`medv` = `r fmt(lowest$medv, 1)`) is compared with the rest of the data below.
+The percentile column is the share of suburbs with a value at or below this
+suburb's. The binary `chas` column is left out; this suburb does not bound
+the Charles River (`chas` = `r lowest$chas`).
+
+```{r boston-lowest}
+cont <- setdiff(names(bos), "chas")
+knitr::kable(data.frame(
+  Variable = cont,
+  `This suburb` = as.numeric(lowest[1, cont]),
+  Minimum = vapply(bos[cont], min, numeric(1)),
+  Maximum = vapply(bos[cont], max, numeric(1)),
+  Percentile = pct(lowest_pct[cont]),
+  check.names = FALSE
+), digits = 3, row.names = FALSE)
+```
+
+## Crime: choosing a scale
+
+```{r boston-crime-dist, fig.height = 3.8}
+crime_long <- data.frame(
+  scale = factor(rep(c("crim", "log1p(crim)"), each = nrow(bos)),
+                 levels = c("crim", "log1p(crim)")),
+  value = c(bos$crim, log1p(bos$crim))
+)
+crime_plot <- ggplot(crime_long, aes(value)) +
+  geom_histogram(bins = 35, fill = palette_main[["primary"]],
+                 colour = "white") +
+  facet_wrap(~scale, scales = "free") +
+  labs(title = "Per capita crime is extremely right skewed",
+       subtitle = "A log1p transform spreads out the many near-zero values",
+       x = NULL, y = "Suburbs",
+       caption = paste0("Median crim = ", fmt(stats::median(bos$crim)),
+                        ", mean = ", fmt(mean(bos$crim)),
+                        ", maximum = ", fmt(max(bos$crim)), ".")) +
+  theme_report()
+crime_plot
+```
+
+The median crime rate is `r fmt(stats::median(bos$crim))` but the mean is
+`r fmt(mean(bos$crim))`, pulled up by a small number of extreme suburbs.
+`log1p(crim)` (log of 1 + crim) is used because it is defined at zero and
+behaves like a log for larger values.
+
+The coursework crime model (`tax`, `ptratio`, `lstat`, `rm`) is fitted to all
+506 suburbs on both scales, with `chas` added to test whether bounding the
+Charles River is associated with crime once the other variables are included.
+These models are for association, not prediction, so they use every row.
+
+```{r boston-crime-diag-raw}
+plot_diagnostics(res$boston$crime_raw, "Diagnostics: crim (original scale)")
+```
+
+```{r boston-crime-diag-log}
+plot_diagnostics(res$boston$crime_log, "Diagnostics: log1p(crim)")
+```
+
+On the original scale the residuals are far from normal (Shapiro-Wilk W =
+`r fmt(shapiro_w(res$boston$crime_raw))`) and their spread grows sharply with
+the fitted values. On the log1p scale the residuals are much closer to normal
+(W = `r fmt(shapiro_w(res$boston$crime_log))`) and their spread no longer grows
+steadily, so the transformed model is used for interpretation. It is still
+not a clean fit: the residuals separate into two groups, and the group with
+high fitted values is mostly the high-tax suburbs (tax = 666) discussed
+above. A single linear term cannot fully describe that cluster, so the
+p-values below should be read as approximate. R squared is
+`r fmt(summary(res$boston$crime_raw)$r.squared)` on the original scale and
+`r fmt(summary(res$boston$crime_log)$r.squared)` on the log1p scale; because
+the responses differ, these two values are not directly comparable.
+
+```{r boston-crime-coef}
+coef_table(res$boston$crime_log)
+```
+
+Higher property tax rates and a higher share of lower-status population are
+associated with higher crime (both p `r fmt_p(pval(res$boston$crime_log, "tax"))`).
+Pupil-teacher ratio (p = `r fmt_p(pval(res$boston$crime_log, "ptratio"))`)
+and bounding the Charles River (p = `r fmt_p(pval(res$boston$crime_log, "chas"))`)
+show no clear association once the other variables are included. Tax rate is
+strongly correlated with highway accessibility (`rad`, r =
+`r fmt(stats::cor(bos$tax, bos$rad))`), so the tax coefficient partly reflects
+that group of high-tax, high-access suburbs.
+
+## Housing values: model comparison
+
+```{r boston-compare}
+show_comparison(bos_cmp)
+```
+
+```{r boston-medv-diag}
+plot_diagnostics(res$boston$lm_all,
+                 "Diagnostics: OLS medv ~ all 12 predictors (training set)")
+```
+
+The OLS residuals curve at both ends of the fitted range, which suggests
+nonlinear relationships (for example with `lstat`) that a linear model cannot
+represent. This is consistent with the regression tree scoring
+`r fmt(bos_best$Test_RMSE)` against `r fmt(bos_ols$Test_RMSE)` for OLS on the
+test set. `medv` is also capped at 50 in the source data
+(`r sum(bos$medv == 50)` suburbs), which limits how well any model can fit the
+most expensive suburbs.
+
+```{r boston-medv-coef}
+coef_table(res$boston$lm_all)
+```
+
+In the OLS fit, `lstat`, `rm`, `ptratio`, `dis` and `nox` have the largest t
+values. Lower-status share and pupil-teacher ratio are associated with lower
+home values and more rooms with higher values, holding the other variables
+fixed.
+
+# Model comparison across datasets
+
+```{r overall, fig.height = 5.5}
+all_cmp <- rbind(
+  cbind(Dataset = "College: Grad.Rate", col_cmp),
+  cbind(Dataset = "Auto: mpg", auto_cmp),
+  cbind(Dataset = "Boston: medv", bos_cmp)
+)
+all_cmp$Relative <- ave(all_cmp$Test_RMSE, all_cmp$Dataset,
+                        FUN = function(x) x / x[1])
+test_sizes <- c(nrow(res$college$eval$test), nrow(res$auto$eval$test),
+                nrow(res$boston$eval$test))
+plot_cmp <- all_cmp[all_cmp$Model != "Mean baseline", ]
+# Order bars within each panel (best at the top); the key keeps model
+# names that appear in more than one dataset separate.
+plot_cmp$Key <- paste(plot_cmp$Dataset, plot_cmp$Model, sep = "|")
+plot_cmp$Key <- stats::reorder(plot_cmp$Key, -plot_cmp$Relative)
+plot_cmp$Dataset <- factor(plot_cmp$Dataset,
+                           levels = c("Auto: mpg", "Boston: medv",
+                                      "College: Grad.Rate"))
+
+comparison_plot <- ggplot(plot_cmp, aes(Relative, Key)) +
+  geom_col(fill = palette_main[["primary"]], width = 0.65) +
+  geom_text(aes(label = pct(Relative)), hjust = -0.15, size = 3.3) +
+  facet_grid(Dataset ~ ., scales = "free_y", space = "free_y") +
+  scale_y_discrete(labels = function(x) sub("^[^|]*\\|", "", x)) +
+  scale_x_continuous(labels = scales::label_percent(),
+                     limits = c(0, 1.05), expand = c(0, 0)) +
+  labs(title = "Test RMSE as a share of the mean-only baseline",
+       subtitle = "Lower is better; 100% means no better than the baseline",
+       x = "Test RMSE / baseline test RMSE", y = NULL,
+       caption = paste0("Each dataset uses one 80/20 split; test sets have ",
+                        min(test_sizes), " to ", max(test_sizes), " rows.")) +
+  theme_report() +
+  theme(strip.text.y = element_text(angle = 0, hjust = 0),
+        panel.grid.major.y = element_blank())
+comparison_plot
+```
+
+```{r save-assets, include = FALSE}
+save_asset(comparison_plot, "model-comparison.png", height = 5.5)
+save_asset(crime_plot, "boston-crime-distribution.png", height = 3.8)
+save_asset(auto_plot, "auto-mpg-weight.png")
+```
+
+# Key findings
+
+1. Fuel efficiency is predicted well by a small model: on the test set,
+   `r auto_log_name` scored RMSE `r fmt(by_model(auto_cmp, auto_log_name)$Test_RMSE)` mpg
+   and R squared `r fmt(by_model(auto_cmp, auto_log_name)$Test_R2)`. The engine
+   size variables are collinear, so their individual coefficients should not
+   be read as separate effects.
+2. For Boston home values, a pruned regression tree had the lowest test RMSE
+   among the models tried here (`r bos_best$Model`,
+   `r fmt(bos_best$Test_RMSE)`), and OLS residuals show nonlinearity.
+3. Boston crime should be modeled on a log scale. On that scale, tax rate and
+   lower-status share are strongly associated with crime; Charles River
+   proximity is not.
+4. Institutional variables explain only part of the variation in college
+   graduation rates (best test R squared `r fmt(col_best$Test_R2)`).
+5. Simple data checks matter: two impossible percentage values were found and
+   excluded, and the Boston CSV was confirmed to match `MASS::Boston` apart
+   from the omitted `black` column.
+
+# Limitations
+
+- **Association only.** These are observational data; no result here
+  supports a causal claim.
+- **One split, small test sets.** Test sets have
+  `r nrow(res$auto$eval$test)` (Auto), `r nrow(res$boston$eval$test)` (Boston)
+  and `r nrow(res$college$eval$test)` (College) rows, so small differences in
+  test RMSE between models are within sampling noise. The CV RMSE column gives
+  a second, less noisy view.
+- **Dated data.** College is from 1995, Auto from the 1970s and early 1980s,
+  and Boston from the 1970 census. Results do not describe current conditions.
+- **Censored response.** Boston `medv` is capped at 50.
+- **Limited model search.** Only linear, lasso and single-tree models are
+  compared; the aim is a transparent comparison, not the most accurate model
+  possible.
+
+# Reproducibility
+
+- Raw data are read from `data/` and never modified; cleaning happens in code
+  (`R/helpers.R`, `R/analysis.R`).
+- Seeds: split `r set$split_seed`, CV folds `r set$cv_seed`, inner tuning
+  folds `r set$tune_seed`. Rendering twice gives identical numbers.
+- Package versions are pinned in `renv.lock`. Render with `Rscript render.R`
+  from the project root.
+
+```{r versions}
+pkgs <- c("rmarkdown", "knitr", "ggplot2", "glmnet", "rpart")
+data.frame(
+  Component = c("R", pkgs),
+  Version = c(paste(R.version$major, R.version$minor, sep = "."),
+              vapply(pkgs, function(p) as.character(utils::packageVersion(p)),
+                     character(1))),
+  row.names = NULL
+)
+```
+
+# References
+
+- James, G., Witten, D., Hastie, T. and Tibshirani, R. *An Introduction to
+  Statistical Learning*, 2nd edition. Springer. Datasets from the `ISLR2`
+  package.
+- Harrison, D. and Rubinfeld, D. L. (1978). Hedonic housing prices and the
+  demand for clean air. *Journal of Environmental Economics and Management*,
+  5, 81 to 102.
+- Friedman, J., Hastie, T. and Tibshirani, R. (2010). Regularization paths for
+  generalized linear models via coordinate descent. *Journal of Statistical
+  Software*, 33(1).
+- Therneau, T. and Atkinson, B. `rpart`: Recursive Partitioning and
+  Regression Trees. R package.
+
+This project began as a midterm project for CS601C Computational Statistics
+at Pace University (Spring 2025) and was later extended with the evaluation,
+diagnostics and reproducibility work described above.

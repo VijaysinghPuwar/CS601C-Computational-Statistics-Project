@@ -1,0 +1,84 @@
+# Restore the pinned R packages, run the unit tests and render the report.
+# On pushes to main, publish the rendered report to GitHub Pages.
+
+name: Test and publish report
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: report-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The fs package (used by rmarkdown) links against libuv on Linux.
+      # libuv1-dev has the same name on every Ubuntu release and pulls in the
+      # runtime library (libuv1 or libuv1t64).
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libuv1-dev
+
+      - name: Set up pandoc
+        uses: r-lib/actions/setup-pandoc@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2.14.0
+
+      - name: Set up R (version from renv.lock)
+        uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2.14.0
+        with:
+          r-version: renv
+          use-public-rspm: true
+
+      - name: Restore R packages with renv
+        uses: r-lib/actions/setup-renv@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2.14.0
+
+      - name: Run unit tests
+        run: Rscript tests/run-tests.R
+
+      - name: Render report
+        run: Rscript render.R
+
+      - name: Check rendered output
+        run: |
+          test -s _site/index.html
+          for f in model-comparison.png boston-crime-distribution.png auto-mpg-weight.png; do
+            test -s "assets/$f"
+          done
+          if grep -q '## Warning' _site/index.html; then
+            echo "Rendered report contains R warnings" >&2
+            exit 1
+          fi
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

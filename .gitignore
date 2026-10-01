@@ -1,0 +1,13 @@
+# R session files
+.Rhistory
+.RData
+.Rproj.user/
+
+# Rendered report (built and published by GitHub Actions)
+_site/
+analysis/*.html
+analysis/*_files/
+analysis/*_cache/
+
+# macOS
+.DS_Store
